@@ -96,7 +96,7 @@ def _validate_llm_output(raw: object, expected_ids: list[int]) -> dict:
     return {"findings": normalized, "recommended_role": role}
 
 
-def _fetch_posts(expected_ids: list[int]) -> list[dict]:
+def _fetch_posts(expected_ids: list[int], expected_wallet: str) -> list[dict]:
     payload = {
         "criteria": {"post_ids": expected_ids},
         "limit": len(expected_ids),
@@ -128,17 +128,23 @@ def _fetch_posts(expected_ids: list[int]) -> list[dict]:
     for result in results:
         post_id = result.get("post_id")
         content = result.get("content")
+        author = result.get("author_wallet")
         
         if (
             isinstance(post_id, bool)
             or not isinstance(post_id, int)
             or not isinstance(content, str)
+            or not isinstance(author, str)
         ):
             raise gl.vm.UserError("API_RESPONSE_INVALID")
+            
+        if author.lower() != expected_wallet.lower():
+            raise gl.vm.UserError("AUTHOR_MISMATCH")
             
         posts.append({
             "post_id": post_id,
             "content": content,
+            "author": author,
         })
 
     posts.sort(key=lambda p: p["post_id"])
@@ -148,7 +154,7 @@ def _fetch_posts(expected_ids: list[int]) -> list[dict]:
 
 
 def _evaluate(wallet: str, expected_ids: list[int]) -> dict:
-    posts = _fetch_posts(expected_ids)
+    posts = _fetch_posts(expected_ids, wallet)
     evidence_digest = hashlib.sha256(
         json.dumps(posts, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -189,6 +195,7 @@ class ContributorEvaluatorCovenant(gl.Contract):
     cases: TreeMap[str, ContributorCase]
     evaluations: TreeMap[str, Evaluation]
     findings: TreeMap[str, PostFinding]
+    used_posts: TreeMap[u256, str]
 
     def __init__(self):
         self.administrator = gl.message.sender_address
@@ -229,6 +236,10 @@ class ContributorEvaluatorCovenant(gl.Contract):
             raise gl.vm.UserError("POST_ID_INVALID")
         ids.sort()
 
+        for p_id in ids:
+            if u256(p_id) in self.used_posts:
+                raise gl.vm.UserError("POST_ALREADY_USED")
+
         def leader_fn():
             return _evaluate(wallet_address, ids)
 
@@ -255,6 +266,9 @@ class ContributorEvaluatorCovenant(gl.Contract):
                 finding["is_organic"],
                 finding["analytical_depth"],
             )
+
+        for p_id in ids:
+            self.used_posts[u256(p_id)] = wallet_address
 
         input_digest = hashlib.sha256(
             (
