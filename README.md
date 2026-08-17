@@ -50,3 +50,24 @@ The contract distinguishes between different levels of engagement, deterministic
 1. **Local Setup:** Install the required GenLayer package for your local environment:
    ```bash
    pip install py-genlayer
+
+## 🎮 How to Interact (via GenLayer Studio)
+
+Once the contract is deployed, you can interact with it using the Read/Write methods in the GenLayer Studio UI. Please follow this exact sequence:
+
+1. **Register (Write Method):**
+   * Select `register_contributor`.
+   * Enter a valid EVM `wallet_address`.
+   * Click **Send Transaction** to initialize the user's state.
+
+2. **Evaluate (Write Method):**
+   * Select `evaluate_contributor`.
+   * Enter the registered `wallet_address`.
+   * Enter `post_ids` as an array (e.g., `[1, 2, 3]`). 
+   * **Important:** These IDs must actually exist in the Indexer API database and belong to the specified wallet, otherwise the transaction will revert to prevent fraudulent claims.
+   * Click **Send Transaction** to trigger the DeAI consensus evaluation.
+
+3. **Check Status (Read Method):**
+   * Select `get_role_status`.
+   * Enter the `wallet_address`.
+   * Click **Call Contract** to see the assigned role (`OG`, `CONTENT_CREATOR`, `NONE`, or `UNASSESSED`).
