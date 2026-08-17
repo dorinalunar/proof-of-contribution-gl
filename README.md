@@ -44,3 +44,9 @@ The contract distinguishes between different levels of engagement, deterministic
 ## 🛠️ Dependencies
 *   Designed for the **GenLayer** network.
 *   Requires `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`.
+
+## 🚀 How to Deploy
+
+1. **Local Setup:** Install the required GenLayer package for your local environment:
+   ```bash
+   pip install py-genlayer
