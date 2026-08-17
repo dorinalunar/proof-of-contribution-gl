@@ -1,26 +1,39 @@
 # Proof of Contribution - GenLayer Intelligent Contract
 
-This repository contains a standalone Python-based GenLayer Intelligent Contract designed to automate and decentralize the evaluation of Web3 community contributions. 
+This repository contains a standalone Python-based GenLayer Intelligent Contract designed to automate and decentralize the evaluation of Web3 community contributions.
 
-Instead of relying on manual moderation, this contract leverages GenLayer's DeAI consensus to analyze the analytical depth, originality, and consistency of a user's content. By fetching exact post records and processing them through deterministic LLM prompts, the system objectively assigns community tiers.
+Instead of relying on manual moderation, this contract leverages GenLayer's DeAI consensus to analyze the analytical depth, originality, and consistency of a user's content. By fetching exact post records from an authoritative indexer, verifying post authorship, and processing content through deterministic LLM prompts, the system objectively assigns community tiers.
+
+---
 
 ## On-Chain Role Assignment
 
 The contract is configured to distinguish between different levels of engagement, specifically assigning roles based on strict criteria:
 
-*   **Content Creators:** A basic entry-level role. Users can qualify for this tier by publishing just seven or eight organic posts.
-*   **OG Role:** A prestigious, top-tier role that is difficult to earn. It requires sustained, high-quality contributions and deep analytical work over a significant period. The DeAI consensus ensures that only users who consistently deliver exceptional value achieve this status.
+* **Content Creators**: A basic entry-level role. Users qualify for this tier by publishing 7 or 8 organic posts.
+* **OG Role**: A prestigious, top-tier role that requires sustained, high-quality contributions and deep analytical work (at least 21 unique analytical posts). The DeAI consensus ensures that only users who consistently deliver exceptional value achieve this status.
+* **None**: Assigned if the contribution thresholds are not met or if posts fail originality/depth criteria.
 
-## Key Features
+---
 
-*   **DeAI Consensus:** Uses decentralized AI to evaluate text and context objectively.
-*   **Automated Evaluation:** The `evaluate_contributor` function checks wallet addresses against submitted post IDs, preventing duplicate or invalid claims.
-*   **Python Smart Contract:** Built with Python for GenLayer's execution environment, allowing for complex logic and easy integration of AI evaluation models.
-*   **Trustless Moderation:** Removes human bias from community reward systems and ambassador programs.
+## Key Security & Architecture Features
 
-## Usage
+* **Authenticated Author Binding**: Fetches authenticated post metadata and strictly verifies that each evaluated post belongs to the target wallet address inside validator execution.
+* **Post Reuse Prevention**: Tracks processed posts on-chain (`used_posts`) to eliminate double-claiming and prevent replay attacks.
+* **DeAI Consensus**: Leverages decentralized AI execution (`gl.vm.run_nondet_unsafe`) with non-deterministic prompt evaluation to validate text quality objectively across validator nodes.
+* **Deterministic Storage**: Stores digests of verified evidence and evaluation findings securely on-chain.
+* **Trustless Moderation**: Removes human bias and central points of failure from community reward systems and ambassador programs.
 
-The primary function of the contract is `evaluate_contributor(wallet_address, post_ids)`. When called, the contract:
-1. Verifies the user's registry status.
-2. Validates the batch of submitted post IDs.
-3. Triggers the DeAI consensus to evaluate the quality and quantity of the submissions against the role thresholds.
+---
+
+## Contract Workflow & Usage
+
+The primary entry point of the contract is `evaluate_contributor(wallet_address, post_ids)`:
+
+1. **Registry Verification**: Confirms that the target contributor is registered in `cases`.
+2. **Batch & Uniqueness Checks**: Validates post ID counts, ensures IDs are positive and unique, and checks that none of the IDs have been processed in previous evaluations.
+3. **DeAI Leader-Validator Execution**: 
+   * Fetches content and verifies post authors via the indexer API.
+   * Prompts the AI evaluator under strict output constraints.
+   * Reaches validator consensus on findings and role assignment.
+4. **State Commit**: Marks posts as used, logs post findings and revision digests, and updates the contributor's assigned role.
