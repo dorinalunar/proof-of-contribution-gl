@@ -71,3 +71,10 @@ Once the contract is deployed, you can interact with it using the Read/Write met
    * Select `get_role_status`.
    * Enter the `wallet_address`.
    * Click **Call Contract** to see the assigned role (`OG`, `CONTENT_CREATOR`, `NONE`, or `UNASSESSED`).
+
+## 🧪 Running Unit Tests
+
+To run local validation unit tests:
+
+```bash
+pytest tests/
