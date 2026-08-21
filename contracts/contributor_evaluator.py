@@ -44,11 +44,9 @@ class PostFinding:
 
 
 def _is_valid_wallet(wallet: str) -> bool:
-    # Strict check for EVM-like wallets
     if len(wallet) == 42 and wallet.startswith("0x"):
         return all(c in "0123456789abcdefABCDEFx" for c in wallet)
-        
-    # Fallback for generic alphanumeric wallets
+
     allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     return (
         MIN_WALLET_BYTES <= len(wallet) <= MAX_WALLET_BYTES
@@ -67,18 +65,18 @@ def _finding_key(wallet: str, revision: int, index: int) -> str:
 def _validate_llm_output(raw: object, expected_ids: list[int]) -> dict:
     if not isinstance(raw, dict) or "findings" not in raw:
         raise gl.vm.UserError("LLM_OUTPUT_INVALID")
-    
+
     findings = raw["findings"]
     if not isinstance(findings, list) or len(findings) != len(expected_ids):
         raise gl.vm.UserError("LLM_OUTPUT_INVALID")
 
     expected_keys = {"post_id", "is_organic", "analytical_depth"}
     normalized: list[dict] = []
-    
+
     for index, finding in enumerate(findings):
         if not isinstance(finding, dict) or set(finding.keys()) != expected_keys:
             raise gl.vm.UserError("LLM_OUTPUT_INVALID")
-            
+
         post_id = finding["post_id"]
         if isinstance(post_id, bool) or not isinstance(post_id, int):
             raise gl.vm.UserError("LLM_OUTPUT_INVALID")
@@ -94,7 +92,7 @@ def _validate_llm_output(raw: object, expected_ids: list[int]) -> dict:
             "is_organic": finding["is_organic"],
             "analytical_depth": finding["analytical_depth"],
         })
-        
+
     return {"findings": normalized}
 
 
@@ -121,7 +119,7 @@ def _fetch_posts(expected_ids: list[int], expected_wallet: str) -> list[dict]:
 
     if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         raise gl.vm.UserError("API_RESPONSE_INVALID")
-        
+
     results = data["results"]
     if len(results) != len(expected_ids):
         raise gl.vm.UserError("API_IDENTITY_MISMATCH")
@@ -131,7 +129,7 @@ def _fetch_posts(expected_ids: list[int], expected_wallet: str) -> list[dict]:
         post_id = result.get("post_id")
         content = result.get("content")
         author = result.get("author_wallet")
-        
+
         if (
             isinstance(post_id, bool)
             or not isinstance(post_id, int)
@@ -139,10 +137,10 @@ def _fetch_posts(expected_ids: list[int], expected_wallet: str) -> list[dict]:
             or not isinstance(author, str)
         ):
             raise gl.vm.UserError("API_RESPONSE_INVALID")
-            
+
         if author.lower() != expected_wallet.lower():
             raise gl.vm.UserError("AUTHOR_MISMATCH")
-            
+
         posts.append({
             "post_id": post_id,
             "content": content,
@@ -160,7 +158,7 @@ def _evaluate(wallet: str, expected_ids: list[int]) -> dict:
     evidence_digest = hashlib.sha256(
         json.dumps(posts, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    
+
     prompt = f"""CONTRIBUTOR_ROLE_EVALUATOR_V2
 ROLE: Evaluate Web3 community contributions based on exact content history.
 
@@ -179,7 +177,7 @@ END UNTRUSTED DATA
 """
     raw = gl.nondet.exec_prompt(prompt, response_format="json")
     validated = _validate_llm_output(raw, expected_ids)
-    
+
     return {
         "evidence_digest": evidence_digest,
         "findings": validated["findings"]
@@ -211,32 +209,105 @@ Return JSON only with exactly one root key: "is_acceptable" (boolean).
 
 
 class ContributorEvaluatorCovenant(gl.Contract):
-    administrator: Address
+    ERR_INVALID_ADDRESS = "INVALID_WALLET_ADDRESS"
+    ERR_INVALID_ADMIN = "INVALID_ADMIN_ADDRESS"
+    ERR_UNAUTHORIZED_REG = "UNAUTHORIZED_WALLET_REGISTRATION"
+    ERR_UNAUTHORIZED_DEREG = "UNAUTHORIZED_WALLET_DEREGISTRATION"
+    ERR_WALLET_ALREADY_REG = "WALLET_ALREADY_REGISTERED"
+    ERR_WALLET_NOT_REG = "WALLET_NOT_REGISTERED"
+    ERR_UNAUTHORIZED = "UNAUTHORIZED"
+    ERR_EMPTY_CODE = "EMPTY_CODE"
+    ERR_POST_COUNT_INVALID = "POST_COUNT_INVALID"
+    ERR_POST_ID_INVALID = "POST_ID_INVALID"
+    ERR_POST_ALREADY_USED = "POST_ALREADY_USED"
+    ERR_CONTRIBUTOR_NOT_FOUND = "CONTRIBUTOR_NOT_FOUND"
+
+    administrator: str
+    registered_wallets: TreeMap[str, bool]
     cases: TreeMap[str, ContributorCase]
     evaluations: TreeMap[str, Evaluation]
     findings: TreeMap[str, PostFinding]
     used_posts: TreeMap[u256, str]
 
-    def __init__(self):
-        self.administrator = gl.message.sender_address
+    def __init__(self, admin: str):
+        """
+        Initializes the contract, setting the provided address as the administrator
+        who has upgrade rights and emergency administrative privileges.
+        """
+        if not admin.startswith('0x') or len(admin) != 42:
+            raise gl.vm.UserError(self.ERR_INVALID_ADMIN)
+        
+        self.administrator = admin
+        
         root = gl.storage.Root.get()
-        root.upgraders.get().append(gl.message.sender_address)
+        root.upgraders.get().append(Address(admin))
 
     @gl.public.write
-    def register_contributor(self, wallet_address: str) -> None:
-        if not _is_valid_wallet(wallet_address):
-            raise gl.vm.UserError("WALLET_FORMAT_INVALID")
-        if wallet_address in self.cases:
-            raise gl.vm.UserError("CONTRIBUTOR_ALREADY_EXISTS")
-            
-        self.cases[wallet_address] = ContributorCase(
+    def register_wallet(self, wallet: str) -> None:
+        """
+        Registers a new contributor wallet into the system. 
+        Execution is restricted to the wallet owner or the administrator.
+        """
+        if not wallet.startswith("0x") or len(wallet) != 42:
+            raise gl.vm.UserError(self.ERR_INVALID_ADDRESS)
+
+        sender = str(gl.message.sender_address)
+        
+        if sender != wallet and sender != self.administrator:
+            raise gl.vm.UserError(self.ERR_UNAUTHORIZED_REG)
+        
+        if wallet in self.registered_wallets:
+            raise gl.vm.UserError(self.ERR_WALLET_ALREADY_REG)
+
+        self.registered_wallets[wallet] = True
+        
+        self.cases[wallet] = ContributorCase(
             gl.message.sender_address,
-            wallet_address,
+            wallet,
             u256(0),
             True,
             u256(0),
             u256(0),
         )
+
+        try:
+            wallet_hash = hashlib.sha256(wallet.encode('utf-8')).hexdigest()
+            gl.emit("WalletRegistered", {
+                "wallet": wallet,
+                "wallet_hash": wallet_hash
+            })
+        except AttributeError:
+            pass
+
+    @gl.public.write
+    def deregister_wallet(self, wallet: str) -> None:
+        """
+        Removes a contributor wallet from the registry. 
+        Execution is restricted to the wallet owner or the administrator.
+        """
+        sender = str(gl.message.sender_address)
+        
+        if sender != wallet and sender != self.administrator:
+            raise gl.vm.UserError(self.ERR_UNAUTHORIZED_DEREG)
+        
+        if wallet not in self.registered_wallets:
+            raise gl.vm.UserError(self.ERR_WALLET_NOT_REG)
+        
+        del self.registered_wallets[wallet]
+        
+        try:
+            gl.emit("WalletDeregistered", {"wallet": wallet})
+        except AttributeError:
+            pass
+
+    def _ensure_wallet_registered(self, wallet: str) -> None:
+        if wallet not in self.registered_wallets:
+            raise gl.vm.UserError(self.ERR_WALLET_NOT_REG)
+
+    def _ensure_wallet_owner_or_admin(self, wallet: str) -> None:
+        sender = str(gl.message.sender_address)
+        if sender != wallet and sender != self.administrator:
+            raise gl.vm.UserError(self.ERR_UNAUTHORIZED)
 
     @gl.public.write
     def evaluate_contributor(
@@ -244,23 +315,35 @@ class ContributorEvaluatorCovenant(gl.Contract):
         wallet_address: str,
         post_ids: list[u256],
     ) -> None:
+        """
+        Evaluates a batch of posts from a registered contributor via AI consensus 
+        and securely updates their roles based on the assessment.
+        Execution is restricted to the wallet owner or the administrator.
+        """
+        sender = str(gl.message.sender_address)
+
+        self._ensure_wallet_registered(wallet_address)
+
+        if sender != wallet_address and sender != self.administrator:
+            raise gl.vm.UserError(self.ERR_UNAUTHORIZED)
+
         if wallet_address not in self.cases:
-            raise gl.vm.UserError("CONTRIBUTOR_NOT_FOUND")
-            
+            raise gl.vm.UserError(self.ERR_CONTRIBUTOR_NOT_FOUND)
+
         stored_case = self.cases[wallet_address]
         latest_revision = int(stored_case.latest_revision)
 
         if not 1 <= len(post_ids) <= MAX_POSTS_PER_BATCH:
-            raise gl.vm.UserError("POST_COUNT_INVALID")
+            raise gl.vm.UserError(self.ERR_POST_COUNT_INVALID)
 
-        ids = [int(p_id) for p_id in post_ids]
-        if any(p_id <= 0 for p_id in ids) or len(set(ids)) != len(ids):
-            raise gl.vm.UserError("POST_ID_INVALID")
+        ids = [int(pid) for pid in post_ids]
+        if any(pid <= 0 for pid in ids) or len(set(ids)) != len(ids):
+            raise gl.vm.UserError(self.ERR_POST_ID_INVALID)
         ids.sort()
 
-        for p_id in ids:
-            if u256(p_id) in self.used_posts:
-                raise gl.vm.UserError("POST_ALREADY_USED")
+        for pid in ids:
+            if u256(pid) in self.used_posts:
+                raise gl.vm.UserError(self.ERR_POST_ALREADY_USED)
 
         def leader_fn():
             return _evaluate(wallet_address, ids)
@@ -268,71 +351,66 @@ class ContributorEvaluatorCovenant(gl.Contract):
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
                 return False
-            
             try:
                 leader_data = leader_result.calldata
                 leader_digest = leader_data["evidence_digest"]
                 leader_findings = leader_data["findings"]
-                
-                # Check deterministic component first
+
                 posts = _fetch_posts(ids, wallet_address)
                 my_digest = hashlib.sha256(
-                    json.dumps(posts, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    json.dumps(posts, sort_keys=True, separators=(",", ":"))
+                    .encode("utf-8")
                 ).hexdigest()
                 
                 if my_digest != leader_digest:
                     return False
-                    
-                # Soft validation of non-deterministic LLM assessment
+
                 return _validate_findings_with_llm(posts, leader_findings)
             except Exception:
                 return False
 
         consensus_result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        
+
         consensus_findings = consensus_result["findings"]
         evidence_digest = consensus_result["evidence_digest"]
 
         revision = latest_revision + 1
         new_organic_count = 0
         new_analytical_count = 0
-        
+
         for index, finding in enumerate(consensus_findings):
             is_organic = finding["is_organic"]
             is_analytical = finding["analytical_depth"]
-            
+
             if is_organic:
                 new_organic_count += 1
             if is_analytical:
                 new_analytical_count += 1
-                
+
             self.findings[_finding_key(wallet_address, revision, index)] = PostFinding(
                 u256(finding["post_id"]),
                 is_organic,
                 is_analytical,
             )
 
-        for p_id in ids:
-            self.used_posts[u256(p_id)] = wallet_address
+        for pid in ids:
+            self.used_posts[u256(pid)] = wallet_address
 
         input_digest = hashlib.sha256(
             (
-                f"{wallet_address}:{','.join(str(p_id) for p_id in ids)}:"
-                f"{evidence_digest}"
+                f"{wallet_address}:{','.join(str(pid) for pid in ids)}:{evidence_digest}"
             ).encode("utf-8")
         ).hexdigest()
-        
-        # Accumulate metrics across multiple evaluations
+
         total_organic = int(stored_case.total_organic) + new_organic_count
         total_analytical = int(stored_case.total_analytical) + new_analytical_count
-        
-        # Deterministically assign role based on accumulated history
+
         assigned_role = "NONE"
         if total_analytical >= 21:
             assigned_role = "OG"
         elif total_organic >= 7:
             assigned_role = "CONTENT_CREATOR"
-        
+
         self.evaluations[_evaluation_key(wallet_address, revision)] = Evaluation(
             u256(revision),
             u8(len(consensus_findings)),
@@ -340,7 +418,7 @@ class ContributorEvaluatorCovenant(gl.Contract):
             evidence_digest,
             input_digest,
         )
-        
+
         self.cases[wallet_address] = ContributorCase(
             stored_case.owner,
             wallet_address,
@@ -352,8 +430,14 @@ class ContributorEvaluatorCovenant(gl.Contract):
 
     @gl.public.view
     def get_role_status(self, wallet_address: str) -> str:
+        """
+        Returns the currently assigned role status for a registered contributor.
+        """
+        self._ensure_wallet_registered(wallet_address)
+        
         if wallet_address not in self.cases:
-            raise gl.vm.UserError("CONTRIBUTOR_NOT_FOUND")
+            raise gl.vm.UserError(self.ERR_CONTRIBUTOR_NOT_FOUND)
+            
         revision = int(self.cases[wallet_address].latest_revision)
         if revision == 0:
             return "UNASSESSED"
@@ -361,8 +445,21 @@ class ContributorEvaluatorCovenant(gl.Contract):
 
     @gl.public.write
     def upgrade(self, new_code: bytes) -> None:
-        if gl.message.sender_address != self.administrator:
-            raise gl.vm.UserError("UNAUTHORIZED")
+        """
+        Allows the contract administrator to upgrade the contract's logic 
+        by supplying the new compiled bytecode.
+        """
+        if str(gl.message.sender_address) != self.administrator:
+            raise gl.vm.UserError(self.ERR_UNAUTHORIZED)
+        if len(new_code) == 0:
+            raise gl.vm.UserError(self.ERR_EMPTY_CODE)
+            
         code = gl.storage.Root.get().code.get()
         code.truncate()
         code.extend(new_code)
+        
+        try:
+            new_hash = hashlib.sha256(new_code).hexdigest()
+            gl.emit("ContractUpgraded", {"admin": self.administrator, "new_hash": new_hash})
+        except AttributeError:
+            pass
