@@ -39,9 +39,9 @@ The contract distinguishes between different levels of engagement, deterministic
 *   `upgrade(new_code: bytes)`: Allows the `administrator` to safely upgrade the contract's bytecode while preserving the storage state.
 
 ### Write Methods
-*   `register_wallet(wallet_address: str)`: Registers a new EVM-compatible wallet address. **Note: This method can only be called from the same account specified in the `wallet_address` parameter (or by the administrator).**
+*   `register_wallet(wallet_address: str)`: Registers a new EVM-compatible wallet address. **Important: register_wallet can only be called by the wallet owner specified in the parameter or by the contract administrator.**
 *   `deregister_wallet(wallet_address: str)`: Removes a wallet from the registry. **Note: This method can only be called from the same account specified in the `wallet_address` parameter (or by the administrator).**
-*   `evaluate_contributor(wallet_address: str, post_ids: list[u256])`: Triggers the DeAI consensus to fetch, evaluate, and score a batch of posts. **Note: This method can only be called from the same account specified in the `wallet_address` parameter (or by the administrator).**
+*   `evaluate_contributor(wallet_address: str, post_ids: list[u256])`: Triggers the DeAI consensus to fetch, evaluate, and score a batch of posts. **Important: evaluate_contributor can only be called by the wallet owner specified in the parameter or by the contract administrator.**
 
 ### View Methods
 *   `get_role_status(wallet_address: str) -> str`: Returns the current assigned role of the contributor.
@@ -49,6 +49,8 @@ The contract distinguishes between different levels of engagement, deterministic
 ---
 
 ## 🎮 How to Interact (Usage Guide)
+
+> **Security note:** Wallet registration and contributor evaluation are permissioned actions. They can be executed only by the wallet owner or by the contract administrator. This prevents third parties from registering or evaluating someone else's wallet without authorization, while still allowing administrative recovery or managed onboarding flows.
 
 To test and use this contract (e.g., via **GenLayer Studio**), follow this exact sequence to ensure transactions do not revert due to security checks:
 
@@ -61,14 +63,14 @@ To test and use this contract (e.g., via **GenLayer Studio**), follow this exact
 1. In GenLayer Studio, **switch your active sender account** to the wallet you want to register (e.g., `Account 1: 0xAAA...`).
 2. Go to Write Methods and select `register_wallet`.
 3. Enter your active wallet address (`0xAAA...`) into the `wallet` field.
-    * *Important: `register_wallet` can only be called from the exact account specified in the parameter.*
-4. Click **Send Transaction**. (If you use a different address, it will revert with `UNAUTHORIZED_WALLET_REGISTRATION`).
+    * *Important: `register_wallet` can only be called by the wallet owner specified in the parameter or by the contract administrator.*
+4. Click **Send Transaction**. (If you use a different address, it will revert with `UNAUTHORIZED_WALLET_REGISTRATION` unless the sender is the contract administrator).
 
 ### Step 3: Evaluate Contributions
 1. **Remain on the same active sender account** (`0xAAA...`).
 2. Select the `evaluate_contributor` method.
 3. Enter your registered wallet address into the `wallet_address` field.
-    * *Important: `evaluate_contributor` can only be called from the exact account specified in the parameter.*
+    * *Important: `evaluate_contributor` can only be called by the wallet owner specified in the parameter or by the contract administrator.*
 4. Enter `post_ids` as an array (e.g., `[1, 2, 3]`). 
     * *Note: These IDs must exist in the Indexer API database, must not have been used before, and must belong to your wallet.*
 5. Click **Send Transaction** to trigger the AI evaluation. Wait for the `ACCEPTED` status.
